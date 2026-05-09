@@ -6,6 +6,7 @@ from duckduckgo_search import DDGS
 from pydantic import BaseModel
 import time
 import json
+import os
 
 # Pydantic models for structured output
 class Claim(BaseModel):
@@ -24,9 +25,18 @@ st.set_page_config(page_title="Fact-Check Agent", page_icon="🔍", layout="wide
 st.title("🔍 Fact-Checking Web App (Truth Layer)")
 st.write("Upload a document, and the AI will extract verifiable claims, cross-reference them with live web data, and report their accuracy.")
 
-st.sidebar.header("Configuration")
-api_key = st.sidebar.text_input("Enter your Google Gemini API Key", type="password")
-st.sidebar.markdown("[Get a Gemini API Key](https://aistudio.google.com/app/apikey)")
+api_key = os.environ.get("GEMINI_API_KEY")
+if not api_key:
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        api_key = None
+
+if not api_key:
+    st.sidebar.header("Configuration")
+    st.sidebar.info("To hide this input, set `GEMINI_API_KEY` in Streamlit secrets.")
+    api_key = st.sidebar.text_input("Enter your Google Gemini API Key", type="password")
+    st.sidebar.markdown("[Get a Gemini API Key](https://aistudio.google.com/app/apikey)")
 
 uploaded_file = st.file_uploader("Upload a PDF document", type=["pdf"])
 
