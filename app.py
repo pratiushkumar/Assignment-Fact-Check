@@ -7,11 +7,13 @@ from pydantic import BaseModel
 import time
 import json
 import os
+import pandas as pd
 
 # Pydantic models for structured output
 class Claim(BaseModel):
     claim: str
     context: str
+    category: str
 
 class ExtractedClaims(BaseModel):
     claims: list[Claim]
@@ -19,11 +21,12 @@ class ExtractedClaims(BaseModel):
 class VerificationResult(BaseModel):
     status: str
     explanation: str
+    confidence_score: int
 
-st.set_page_config(page_title="Fact-Check Agent", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Fact-Check Agent", layout="wide")
 
-st.title("🔍 Fact-Checking Web App (Truth Layer)")
-st.write("Upload a document, and the AI will extract verifiable claims, cross-reference them with live web data, and report their accuracy.")
+st.title("Fact-Checking Web App (Truth Layer)")
+st.write("Upload a Document to extract specific claims, cross-reference them with live web data, and verify their accuracy.")
 
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key:
@@ -53,6 +56,7 @@ def extract_claims(text, client):
     prompt = f"""
     You are an expert fact-checker. Please read the following text and extract all specific, verifiable claims.
     Focus on: statistics, dates, financial figures, technical specifications, and absolute statements.
+    Also provide a short 'category' for each claim (e.g., Financial, Date, Technical, General).
     
     Text:
     {text}
@@ -95,6 +99,7 @@ def verify_claim(claim, search_results, client):
     - False: The search results directly contradict the claim, or there is no evidence found to support it.
     
     Provide a brief explanation including the actual facts from the search results.
+    Also provide a 'confidence_score' from 0 to 100 representing how confident you are in this assessment based on the search results.
     """
     try:
         response = client.models.generate_content(
@@ -108,7 +113,7 @@ def verify_claim(claim, search_results, client):
         )
         return json.loads(response.text)
     except Exception as e:
-        return {"status": "Error", "explanation": str(e)}
+        return {"status": "Error", "explanation": str(e), "confidence_score": 0}
 
 if uploaded_file and api_key:
     if st.button("Start Fact-Checking"):
@@ -122,7 +127,6 @@ if uploaded_file and api_key:
         client = genai.Client(api_key=api_key)
         
         with st.spinner("Extracting claims..."):
-            # Limit text to avoid too many tokens if it's a huge PDF
             claims = extract_claims(text[:20000], client)
             
         if not claims:
@@ -132,41 +136,66 @@ if uploaded_file and api_key:
         st.subheader(f"Found {len(claims)} claims. Verifying...")
         
         progress_bar = st.progress(0)
-        
-        results_container = st.container()
+        results_list = []
         
         for i, claim in enumerate(claims):
-            with results_container:
-                st.markdown(f"### Claim {i+1}")
-                st.markdown(f"**Statement:** {claim['claim']}")
-                st.markdown(f"**Context:** {claim['context']}")
+            # Using an expander for a cleaner UI
+            with st.expander(f"Claim {i+1}: {claim['claim'][:70]}...", expanded=True):
+                col1, col2 = st.columns([1, 1])
                 
-                # Search web
-                with st.spinner(f"Searching web for claim {i+1}..."):
-                    search_results = search_web(claim['claim'])
+                with col1:
+                    st.markdown("**Statement:**")
+                    st.info(claim['claim'])
+                    st.markdown(f"**Context:** {claim['context']}")
+                    st.markdown(f"**Category:** {claim.get('category', 'General')}")
                 
-                # Verify
-                with st.spinner(f"Verifying claim {i+1}..."):
-                    verification = verify_claim(claim, search_results, client)
-                
-                status = verification.get("status", "Error")
-                explanation = verification.get("explanation", "No explanation provided.")
-                
-                if status == "Verified":
-                    st.success(f"✅ **{status}**: {explanation}")
-                elif status == "Inaccurate":
-                    st.warning(f"⚠️ **{status}**: {explanation}")
-                elif status == "False":
-                    st.error(f"❌ **{status}**: {explanation}")
-                else:
-                    st.info(f"ℹ️ **{status}**: {explanation}")
+                with col2:
+                    # Search web
+                    with st.spinner("Searching web..."):
+                        search_results = search_web(claim['claim'])
                     
-                st.markdown("---")
+                    # Verify
+                    with st.spinner("Verifying claim..."):
+                        verification = verify_claim(claim, search_results, client)
+                    
+                    status = verification.get("status", "Error")
+                    explanation = verification.get("explanation", "No explanation provided.")
+                    confidence = verification.get("confidence_score", 0)
+                    
+                    st.markdown("**Verification Result:**")
+                    if status == "Verified":
+                        st.success(f"Status: {status} (Confidence: {confidence}%)\n\n{explanation}")
+                    elif status == "Inaccurate":
+                        st.warning(f"Status: {status} (Confidence: {confidence}%)\n\n{explanation}")
+                    elif status == "False":
+                        st.error(f"Status: {status} (Confidence: {confidence}%)\n\n{explanation}")
+                    else:
+                        st.info(f"Status: {status} (Confidence: {confidence}%)\n\n{explanation}")
+                
+                results_list.append({
+                    "Claim": claim['claim'],
+                    "Context": claim['context'],
+                    "Category": claim.get('category', 'General'),
+                    "Status": status,
+                    "Confidence Score": confidence,
+                    "Explanation": explanation
+                })
                 
             progress_bar.progress((i + 1) / len(claims))
             time.sleep(1) # Small delay to respect rate limits
             
         st.success("Fact-checking complete!")
+        
+        # Data Export Feature
+        st.markdown("### Export Results")
+        df = pd.DataFrame(results_list)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Results as CSV",
+            data=csv,
+            file_name='fact_check_results.csv',
+            mime='text/csv',
+        )
 
 elif uploaded_file and not api_key:
     st.warning("Please enter your Google Gemini API key in the sidebar to proceed.")
