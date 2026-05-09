@@ -1,0 +1,5 @@
+streamlit
+PyPDF2
+google-genai
+duckduckgo-search
+pydantic
